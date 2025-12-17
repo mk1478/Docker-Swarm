@@ -36,32 +36,62 @@ jobs:
   deploy:
     needs: build-and-push
     runs-on: ubuntu-latest
-    environment: production # Requires your "Approve" click in GitHub
+    environment: production
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
       - name: Deploy to Swarm via Portainer
         run: |
-          # 1. Get JWT Token (Using a safer JSON construction)
-          AUTH_DATA=$(printf '{"username":"admin","password":"%s"}' "${{ secrets.PORTAINER_PASSWORD }}")
+          # 1. Get JWT Token with Debugging
+          # Use printf to avoid shell expansion issues with special characters in passwords
+          AUTH_JSON=$(printf '{"username":"admin","password":"%s"}' "${{ secrets.PORTAINER_PASSWORD }}")
           
-          JWT=$(curl -s -X POST "${{ secrets.PORTAINER_URL }}/api/auth" \
+          echo "Connecting to ${{ secrets.PORTAINER_URL }}..."
+          
+          # Capture both the status code and the response body
+          RESPONSE_FILE=$(mktemp)
+          HTTP_CODE=$(curl -s -o "$RESPONSE_FILE" -w "%{http_code}" -X POST "${{ secrets.PORTAINER_URL }}/api/auth" \
             -H "Content-Type: application/json" \
-            -d "$AUTH_DATA" | jq -r .jwt)
-          
-          # Check if JWT is valid
+            -d "$AUTH_JSON")
+
+          RESPONSE_BODY=$(cat "$RESPONSE_FILE")
+
+          if [ "$HTTP_CODE" -ne 200 ]; then
+            echo "❌ Auth Failed with Status: $HTTP_CODE"
+            echo "Response: $RESPONSE_BODY"
+            exit 1
+          fi
+
+          JWT=$(echo "$RESPONSE_BODY" | jq -r .jwt)
+
           if [ "$JWT" == "null" ] || [ -z "$JWT" ]; then
-            echo "Error: Could not retrieve JWT. Check Portainer URL and Password."
+            echo "❌ Error: JWT not found in response."
             exit 1
           fi
           
+          echo "✅ Authentication Successful."
+
           # 2. Find the Stack ID
           STACK_ID=$(curl -s -H "Authorization: Bearer $JWT" "${{ secrets.PORTAINER_URL }}/api/stacks" \
             | jq -r '.[] | select(.Name=="devops") | .Id')
           
+          if [ -z "$STACK_ID" ] || [ "$STACK_ID" == "null" ]; then
+            echo "❌ Error: Could not find Stack ID for name 'devops'."
+            exit 1
+          fi
+          
+          echo "🚀 Updating Stack ID: $STACK_ID"
+
           # 3. Update the Stack
-          curl -s -X PUT "${{ secrets.PORTAINER_URL }}/api/stacks/$STACK_ID/file?endpointId=1" \
+          UPDATE_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "${{ secrets.PORTAINER_URL }}/api/stacks/$STACK_ID/file?endpointId=1" \
             -H "Authorization: Bearer $JWT" \
             -F "file=@docker-compose.yml" \
-            -F "Name=devops"
+            -F "Name=devops")
+
+          if [ "$UPDATE_STATUS" -eq 200 ] || [ "$UPDATE_STATUS" -eq 204 ]; then
+            echo "🎉 Stack successfully updated!"
+          else
+            echo "❌ Stack update failed with status: $UPDATE_STATUS"
+            exit 1
+          fi
