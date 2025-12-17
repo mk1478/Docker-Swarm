@@ -1,0 +1,12 @@
+{
+  "name": "swarm-node-backend",
+  "version": "1.0.0",
+  "description": "Simple Node.js API for Docker Swarm testing",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2"
+  }
+}
