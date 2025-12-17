@@ -1,0 +1,258 @@
+version: '3.8'
+
+# --- Networks Definition (Task 2.1: Multi-Tier Design) ---
+networks:
+  # 1. Public network: For ingress/load balancer services
+  web-public:
+    driver: overlay
+    attachable: true
+
+  # 2. Frontend network: For web ↔ api communication (Encrypted)
+  app-frontend:
+    driver: overlay
+    external: true
+    name: devops_app-frontend
+    driver_opts:
+      encrypted: "true"
+
+  # 3. Backend network: For api ↔ db/cache communication (Encrypted)
+  app-backend:
+    driver: overlay
+    external: true
+    name: devops_app-backend
+    driver_opts:
+      encrypted: "true"
+
+  # 4. Monitoring network: For Prometheus/Grafana stack (Encrypted)
+  monitoring:
+    driver: overlay
+    external: true
+    name: devops_monitori # Matches your existing network name
+    driver_opts:
+      encrypted: "true"
+
+# --- Volumes Definition (Including Monitoring Persistence) ---
+volumes:
+  postgres_data:
+    driver: local
+  # NEW: Persistent storage for Prometheus metrics
+  prometheus_data:
+    driver: local
+  # NEW: Persistent storage for Grafana dashboards/config
+  grafana_data:
+    driver: local
+
+# --- Services Definition ---
+services:
+
+  # 1. Reverse Proxy Service: Nginx (Task 2.2 Ingress)
+  proxy:
+    image: nginx:stable-alpine
+    ports:
+      - target: 80
+        published: 80
+        protocol: tcp
+        mode: ingress
+      - target: 443
+        published: 443
+        protocol: tcp
+        mode: ingress
+    volumes:
+      - /home/abc/nginx-proxy.conf:/etc/nginx/conf.d/default.conf:ro
+      - /home/abc/certs:/etc/nginx/ssl:ro
+    configs:
+      - source: nginx_global_conf
+        target: /etc/nginx/nginx.conf
+        mode: 0444
+    networks:
+      - web-public
+      - app-frontend
+      - monitoring # Included for monitoring metrics
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          cpus: '0.10'
+          memory: 128M
+
+  # 2. Frontend Service: Nginx
+  web:
+    image: frontend:latest
+    networks:
+      - web-public
+      - app-frontend
+    deploy:
+      mode: replicated
+      replicas: 3
+      placement:
+        constraints:
+          - node.role == manager
+        preferences:
+          - spread: node.hostname
+      resources:
+        limits:
+          cpus: '0.20'
+          memory: 64M
+        reservations:
+          memory: 32M
+
+  # 3. Backend API Service:
+  api:
+    image: backend:latest
+    secrets:
+      - api_key
+      - db_password
+    configs:
+      - app_config
+    environment:
+      - API_PORT=8080
+    networks:
+      - app-frontend
+      - app-backend
+    deploy:
+      mode: replicated
+      replicas: 2
+      resources:
+        limits:
+          cpus: '1.0'
+        reservations:
+          memory: 64M
+
+  # 4. Database Service: PostgreSQL
+  db:
+    image: postgres:15-alpine
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - app-backend
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 512M
+
+  # 5. Cache Service: Redis
+  cache:
+    image: redis:7-alpine
+    networks:
+      - app-backend
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          cpus: '0.20'
+          memory: 64M
+          
+  # -----------------------------------------------------
+  # 6. Prometheus Service (TASK 4.1)
+  prometheus:
+    image: prom/prometheus:v2.48.0
+    ports:
+      # Expose Prometheus UI
+      - "9090:9090"
+    volumes:
+      - prometheus_data:/prometheus
+      # Configuration file defined in the configs block below
+      - prometheus_config:/etc/prometheus/prometheus.yml:ro 
+    networks:
+      - monitoring
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          memory: 512M
+
+  # 7. Grafana Service (TASK 4.1)
+  grafana:
+    image: grafana/grafana:10.2.2
+    ports:
+      # Expose Grafana UI
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+    networks:
+      - monitoring
+    deploy:
+      mode: replicated
+      replicas: 1
+      resources:
+        limits:
+          memory: 256M
+          
+  # 8. Node Exporter (TASK 4.1) - Host Metrics
+  node_exporter:
+    image: prom/node-exporter:v1.7.0
+    command: 
+      - '--path.rootfs=/host'
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/host:ro
+    networks:
+      - monitoring
+    deploy:
+      mode: global # Deploys one instance on every node
+      resources:
+        limits:
+          memory: 32M
+
+  # 9. cAdvisor (TASK 4.1) - Container Metrics
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.47.0
+    ports:
+      # Expose for direct access/testing, scrape is internal
+      - "8081:8080" 
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:rw
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    networks:
+      - monitoring
+    deploy:
+      mode: global # Deploys one instance on every node
+      resources:
+        limits:
+          memory: 128M
+  # -----------------------------------------------------
+
+# --- Secrets and Configs Declaration ---
+secrets:
+  api_key:
+    external: true
+  db_password:
+    external: true
+  db_username:
+    external: true
+  db_connection_string:
+    external: true
+
+configs:
+  app_config:
+    name: myapp_app_config
+    file: ./configs/app_config.json
+  nginx_global_conf:
+    name: myapp_nginx_global_conf
+    file: ./configs/nginx_global.conf
+  # NEW: Prometheus Configuration file
+  prometheus_config:
+    name: devops_prometheus_config
+    file: ./configs/prometheus.yml

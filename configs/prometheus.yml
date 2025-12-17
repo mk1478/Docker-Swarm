@@ -1,0 +1,63 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # 1. Prometheus Service Discovery (Internal Monitoring)
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # 2. Dynamic Docker Swarm Service Discovery
+  - job_name: 'docker-services'
+    # Scrapes all services attached to the 'monitoring' network
+    docker_swarm_sd_configs:
+      - role: services
+        # NOTE: Ensure the name here matches the network name in your docker-compose.yml
+        # If your stack is 'devops', the network is 'devops_monitoring'
+        filters: 
+          - name: devops_monitoring
+    # Filter and relabel targets
+    relabel_configs:
+      # Use the target service name as the instance label
+      - source_labels: [__meta_docker_swarm_service_name]
+        regex: 'devops_(.*)'
+        target_label: instance
+        replacement: $1
+      # Only scrape services with a specific port label (optional, but good practice)
+      - source_labels: [__meta_docker_swarm_service_name]
+        action: keep
+        regex: 'devops_api|devops_web|devops_db|devops_cache'
+      # Set the scrape path to /metrics (Node/cAdvisor will use default ports)
+      - source_labels: [__address__]
+        target_label: __address__
+        replacement: $1:9100  # Default port, overridden by specific targets below
+
+  # 3. Node Exporter (Host Metrics: CPU/Memory/Disk) - Deployed Globally
+  - job_name: 'node-exporter'
+    # Use the same Swarm discovery but target the Node Exporter service
+    docker_swarm_sd_configs:
+      - role: services
+        filters:
+          - name: devops_node_exporter
+    relabel_configs:
+      - source_labels: [__meta_docker_swarm_node_hostname]
+        target_label: instance
+      # Set the scrape port to 9100 for Node Exporter
+      - source_labels: [__address__]
+        target_label: __address__
+        replacement: $1:9100
+
+  # 4. cAdvisor (Container Runtime Metrics) - Deployed Globally
+  - job_name: 'cadvisor'
+    docker_swarm_sd_configs:
+      - role: services
+        filters:
+          - name: devops_cadvisor
+    relabel_configs:
+      - source_labels: [__meta_docker_swarm_node_hostname]
+        target_label: instance
+      # Set the scrape port to 8080 (where cAdvisor exposes metrics)
+      - source_labels: [__address__]
+        target_label: __address__
+        replacement: $1:8080
