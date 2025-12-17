@@ -43,16 +43,24 @@ jobs:
 
       - name: Deploy to Swarm via Portainer
         run: |
-          # 1. Get JWT Token
+          # 1. Get JWT Token (Using a safer JSON construction)
+          AUTH_DATA=$(printf '{"username":"admin","password":"%s"}' "${{ secrets.PORTAINER_PASSWORD }}")
+          
           JWT=$(curl -s -X POST "${{ secrets.PORTAINER_URL }}/api/auth" \
             -H "Content-Type: application/json" \
-            -d "{\"username\":\"admin\", \"password\":\"${{ secrets.PORTAINER_PASSWORD }}\"}" | jq -r .jwt)
+            -d "$AUTH_DATA" | jq -r .jwt)
           
-          # 2. Find the Stack ID for "devops"
+          # Check if JWT is valid
+          if [ "$JWT" == "null" ] || [ -z "$JWT" ]; then
+            echo "Error: Could not retrieve JWT. Check Portainer URL and Password."
+            exit 1
+          fi
+          
+          # 2. Find the Stack ID
           STACK_ID=$(curl -s -H "Authorization: Bearer $JWT" "${{ secrets.PORTAINER_URL }}/api/stacks" \
             | jq -r '.[] | select(.Name=="devops") | .Id')
           
-          # 3. Update the Stack using our docker-compose.yml
+          # 3. Update the Stack
           curl -s -X PUT "${{ secrets.PORTAINER_URL }}/api/stacks/$STACK_ID/file?endpointId=1" \
             -H "Authorization: Bearer $JWT" \
             -F "file=@docker-compose.yml" \
