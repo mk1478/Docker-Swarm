@@ -248,10 +248,10 @@ secrets:
 configs:
   app_config:
     external: true
-    name: myapp_app_config
+    name: devops_app_config
   nginx_global_conf:
     external: true
-    name: myapp_nginx_global_conf
+    name: devops_nginx_conf
   prometheus_config:
     external: true
-    name: devops_prometheus_config
+    name: devops_prom_conf
