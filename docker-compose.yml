@@ -61,7 +61,7 @@ services:
 
   # 2. Frontend
   web:
-    image: ${{ secrets.DOCKER_USERNAME }}/frontend:latest
+    image: manojd0cker/frontend:latest
     networks:
       - web-public
       - app-frontend
@@ -71,7 +71,7 @@ services:
 
   # 3. Backend API
   api:
-    image: ${{ secrets.DOCKER_USERNAME }}/backend:latest
+    image: manojd0cker/backend:latest
     secrets:
       - api_key
       - db_password
