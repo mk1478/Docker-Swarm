@@ -247,12 +247,11 @@ secrets:
 
 configs:
   app_config:
+    external: true
     name: myapp_app_config
-    file: ./configs/app_config.json
   nginx_global_conf:
+    external: true
     name: myapp_nginx_global_conf
-    file: ./configs/nginx_global.conf
-  # NEW: Prometheus Configuration file
   prometheus_config:
+    external: true
     name: devops_prometheus_config
-    file: ./configs/prometheus.yml
