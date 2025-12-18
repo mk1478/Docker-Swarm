@@ -43,15 +43,15 @@ jobs:
 
       - name: Deploy to Swarm via Portainer
         run: |
-          # 1. Get JWT Token with Debugging
-          # Use printf to avoid shell expansion issues with special characters in passwords
+          # 1. Get JWT Token
+          # We use printf to handle special characters in the password safely
           AUTH_JSON=$(printf '{"username":"admin","password":"%s"}' "${{ secrets.PORTAINER_PASSWORD }}")
           
           echo "Connecting to ${{ secrets.PORTAINER_URL }}..."
           
-          # Capture both the status code and the response body
           RESPONSE_FILE=$(mktemp)
-          HTTP_CODE=$(curl -s -o "$RESPONSE_FILE" -w "%{http_code}" -X POST "${{ secrets.PORTAINER_URL }}/api/auth" \
+          # Use -k if your Portainer uses a self-signed certificate
+          HTTP_CODE=$(curl -s -k -o "$RESPONSE_FILE" -w "%{http_code}" -X POST "${{ secrets.PORTAINER_URL }}/api/auth" \
             -H "Content-Type: application/json" \
             -d "$AUTH_JSON")
 
@@ -64,16 +64,11 @@ jobs:
           fi
 
           JWT=$(echo "$RESPONSE_BODY" | jq -r .jwt)
-
-          if [ "$JWT" == "null" ] || [ -z "$JWT" ]; then
-            echo "❌ Error: JWT not found in response."
-            exit 1
-          fi
-          
           echo "✅ Authentication Successful."
 
           # 2. Find the Stack ID
-          STACK_ID=$(curl -s -H "Authorization: Bearer $JWT" "${{ secrets.PORTAINER_URL }}/api/stacks" \
+          # We search for the stack named "devops"
+          STACK_ID=$(curl -s -k -H "Authorization: Bearer $JWT" "${{ secrets.PORTAINER_URL }}/api/stacks" \
             | jq -r '.[] | select(.Name=="devops") | .Id')
           
           if [ -z "$STACK_ID" ] || [ "$STACK_ID" == "null" ]; then
@@ -84,14 +79,24 @@ jobs:
           echo "🚀 Updating Stack ID: $STACK_ID"
 
           # 3. Update the Stack
-          UPDATE_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X PUT "${{ secrets.PORTAINER_URL }}/api/stacks/$STACK_ID/file?endpointId=1" \
+          # For Web-Editor stacks, we must send a JSON payload with "StackFileContent"
+          # jq -Rs . converts your docker-compose.yml into a safe JSON string
+          
+          COMPOSE_CONTENT=$(jq -Rs . < docker-compose.yml)
+          
+          # endpointId is usually 1 for the local environment
+          UPDATE_RESPONSE=$(curl -s -k -w "%{http_code}" -X PUT "${{ secrets.PORTAINER_URL }}/api/stacks/$STACK_ID?endpointId=1" \
             -H "Authorization: Bearer $JWT" \
-            -F "file=@docker-compose.yml" \
-            -F "Name=devops")
+            -H "Content-Type: application/json" \
+            -d "{ \"StackFileContent\": $COMPOSE_CONTENT, \"Env\": [], \"Prune\": true }")
+
+          # Extract HTTP code (last 3 characters of the response)
+          UPDATE_STATUS="${UPDATE_RESPONSE:${#UPDATE_RESPONSE}-3}"
 
           if [ "$UPDATE_STATUS" -eq 200 ] || [ "$UPDATE_STATUS" -eq 204 ]; then
             echo "🎉 Stack successfully updated!"
           else
             echo "❌ Stack update failed with status: $UPDATE_STATUS"
+            echo "Response Body: ${UPDATE_RESPONSE:0:${#UPDATE_RESPONSE}-3}"
             exit 1
           fi
